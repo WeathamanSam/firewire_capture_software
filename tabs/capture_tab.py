@@ -2,55 +2,32 @@
 import os
 import signal
 import subprocess
-import datetime
-import glob
-import shutil  # <--- NEW: For checking disk space
-import time    # <--- NEW: For file size checks
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QLabel, QPushButton, 
                              QHBoxLayout, QGridLayout, QFrame, QMessageBox,
-                             QMessageBox, QInputDialog, QLineEdit,
-                             QApplication, QProgressDialog)
-from PyQt6.QtCore import Qt, QThread, pyqtSignal
+                             QInputDialog, QLineEdit, QProgressDialog)
+from PyQt6.QtCore import Qt
 
-# Import the Dialog
+# --- NEW IMPORTS ---
 from components.session_dialog import SessionDialog
+from core.capture_manager import CaptureManager
+from core.workers import RecordingWatchdog, AutosplitWorker
 
-# --- WATCHDOG THREAD ---
-class RecordingWatchdog(QThread):
-    crash_detected = pyqtSignal()
-    def __init__(self, process):
-        super().__init__()
-        self.process = process
-        self.is_active = True
-    def run(self):
-        while self.is_active:
-            # If the process stops running (returns a code), emit crash signal
-            if self.process.poll() is not None:
-                if self.is_active: 
-                    self.crash_detected.emit()
-                return
-            self.msleep(500)
-    def stop_monitoring(self):
-        self.is_active = False
-
-# --- MAIN CAPTURE DECK ---
 class CaptureDeck(QWidget):
     def __init__(self, config):
         super().__init__()
-        self.config = config 
+        # Use the new Manager for logic
+        self.manager = CaptureManager(config)
         
         self.preview_process = None
         self.watchdog = None 
-        self.current_recording_path = None # <--- NEW: Track current file
+        self.current_recording_path = None 
 
-        # Default Session Data
-        self.client_fname = "Jane"
-        self.client_lname = "Doe"
-        self.tape_num = "01"
-        self.tape_format = "mini_dv"
-        self.manual_folder = "" 
+        # Default Session Data (fname, lname, tape, format, manual_label)
+        self.session_data = ("Jane", "Doe", "01", "mini_dv", "") 
 
-        # Main Layout
+        self.setup_ui()
+
+    def setup_ui(self):
         layout = QVBoxLayout()
         self.setLayout(layout)
 
@@ -90,79 +67,45 @@ class CaptureDeck(QWidget):
         
         layout.addLayout(controls_layout)
 
-        # Connect Buttons
+        # Connect Buttons via Manager
         self.btn_play.clicked.connect(self.play_tape)
         self.btn_stop.clicked.connect(self.stop_tape)
-        self.btn_rewind.clicked.connect(self.rewind_tape)
-        self.btn_ff.clicked.connect(self.ff_tape)
+        self.btn_rewind.clicked.connect(lambda: self.manager.run_tape_control("rewind"))
+        self.btn_ff.clicked.connect(lambda: self.manager.run_tape_control("ff"))
         self.btn_record.clicked.connect(self.toggle_record)
 
-    def update_session_info(self, fname, lname, tape, fmt, manual_label):
-        self.client_fname = fname
-        self.client_lname = lname
-        self.tape_num = tape
-        self.tape_format = fmt
-        self.manual_folder = manual_label
-        
+    def update_session_display(self, fname, lname, tape, fmt, manual_label):
+        self.session_data = (fname, lname, tape, fmt, manual_label)
         display_text = f"Recording: {fname} {lname} | Tape {tape} | {fmt}"
         if fmt != "mini_dv":
             display_text += f" ({manual_label})"
         self.info_label.setText(display_text)
 
-    # --- NEW: SAFETY CHECK FOR DISK SPACE ---
-    def check_disk_space(self, path):
-        try:
-            total, used, free = shutil.disk_usage(path)
-            # DV is ~13GB per hour. Warn if less than 15GB free.
-            free_gb = free // (2**30)
-            if free_gb < 15:
-                QMessageBox.warning(self, "Low Disk Space", 
-                                    f"⚠️ WARNING: Only {free_gb}GB free on drive!\n"
-                                    "One MiniDV tape requires ~13GB.\n"
-                                    "Recording may stop abruptly.")
-                return False
-            return True
-        except FileNotFoundError:
-            return True # Path doesn't exist yet, assume root is fine for now
-
-    def run_command(self, cmd):
-        FULL_PATH = "/usr/bin/dvcont"
-        if cmd[0] == "dvcont":
-            cmd[0] = FULL_PATH
-        try:
-            subprocess.Popen(cmd) 
-        except FileNotFoundError:
-            print(f"Error: Could not find {cmd[0]}")
-
+    # --- TAPE CONTROL HANDLERS ---
     def play_tape(self):
-        self.run_command(["dvcont", "play"]) 
+        self.manager.run_tape_control("play")
+        # Only start preview if not already running
         if self.preview_process is None:
-            # Only start preview if not already running (prevents stacking windows)
-            wid = str(int(self.video_frame.winId()))
-            cmd = f"dvgrab -format raw - | mpv --wid={wid} --profile=low-latency -"
-            self.preview_process = subprocess.Popen(cmd, shell=True, preexec_fn=os.setsid)
+            cmd = self.manager.get_preview_command(int(self.video_frame.winId()))
+            self.start_process(cmd)
 
     def stop_tape(self):
-        self.run_command(["dvcont", "stop"])
-        # Only kill process if we are NOT recording. 
-        # If recording, let the user stop the record button first.
+        self.manager.run_tape_control("stop")
+        # Only kill process if we are NOT recording
         if not self.btn_record.isChecked():
             self.kill_process()
 
-    def rewind_tape(self):
-        self.run_command(["dvcont", "rewind"])
-
-    def ff_tape(self):
-        self.run_command(["dvcont", "ff"])
+    def start_process(self, cmd_str):
+        # Starts a process and attaches setsid so we can kill the whole group later
+        self.preview_process = subprocess.Popen(cmd_str, shell=True, preexec_fn=os.setsid)
 
     def kill_process(self):
         if self.watchdog:
             self.watchdog.stop_monitoring()
-            self.watchdog.wait() # Ensure thread finishes
+            self.watchdog.wait()
             self.watchdog = None
 
         if self.preview_process:
-            # Kill the whole process group (shell + dvgrab + tee + mpv)
             try:
                 os.killpg(os.getpgid(self.preview_process.pid), signal.SIGTERM)
             except:
@@ -171,45 +114,14 @@ class CaptureDeck(QWidget):
             self.video_frame.setStyleSheet("background-color: black; border: 2px solid #333;")
 
     def on_crash_detected(self):
-        # Called if the pipeline dies unexpectedly (e.g., cable pulled)
         self.kill_process()
         self.btn_record.setChecked(False)
         self.btn_record.setText("🔴 REC")
         self.video_frame.setStyleSheet("border: 2px solid #333;")
         self.info_label.setText("Current Session: Waiting for Setup...")
-        
-        QMessageBox.critical(self, "Capture Error", 
-                             "Signal Lost! The camera stopped communicating.\n"
-                             "Recording has been stopped safely.")
+        QMessageBox.critical(self, "Capture Error", "Signal Lost! Recording stopped safely.")
 
-    def get_meteorological_season(self):
-        today = datetime.date.today()
-        month = today.month
-        year = today.year
-        
-        if month in [12, 1, 2]:
-            start_month = 12
-            start_year = year - 1 if month in [1, 2] else year
-        elif month in [3, 4, 5]:
-            start_month = 3
-            start_year = year
-        elif month in [6, 7, 8]:
-            start_month = 6
-            start_year = year
-        else: 
-            start_month = 9
-            start_year = year
-
-        end_month = (start_month + 2)
-        end_year = start_year
-        if end_month > 12:
-            end_month -= 12
-            end_year += 1
-            
-        start_str = f"{str(start_year)[2:]}{start_month:02d}"
-        end_str = f"{str(end_year)[2:]}{end_month:02d}"
-        return f"{start_str}_{end_str}"
-
+    # --- RECORDING LOGIC ---
     def toggle_record(self):
         # 1. STOPPING RECORDING
         if not self.btn_record.isChecked():
@@ -218,34 +130,31 @@ class CaptureDeck(QWidget):
             self.info_label.setText("Current Session: Waiting for Setup...")
             self.kill_process()
 
-            if hasattr(self, 'tape_format') and self.tape_format == "mini_dv":
+            # Check if we should split (Only for MiniDV usually)
+            if self.session_data[3] == "mini_dv":
                 if self.current_recording_path and os.path.exists(self.current_recording_path):
                     if os.path.getsize(self.current_recording_path) > 0:
                         self.process_autosplit()
                     else:
                         print("Warning: Master file is empty.")
-                else:
-                    print("Master file not found (or capture failed).")
-
-            self.info_label.setText("Current Session: Waiting for Setup...")
             return
 
         # 2. STARTING RECORDING
-        root_path = self.config.get("root_archive_path")
-        
-        # --- NEW: CHECK DISK SPACE BEFORE STARTING ---
-        if not self.check_disk_space(root_path):
-            self.btn_record.setChecked(False)
-            return
+        is_safe, free_gb = self.manager.check_disk_space()
+        if not is_safe:
+            QMessageBox.warning(self, "Low Disk Space", f"⚠️ WARNING: Only {free_gb}GB free!\nRecording may stop abruptly.")
+            # We allow them to continue if they want, or we could return here.
 
-        dialog = SessionDialog(root_path)
+        dialog = SessionDialog(self.manager.config.get("root_archive_path"))
         if dialog.exec():
-            fname, lname, tape, fmt, manual_lbl = dialog.get_data()
-            self.update_session_info(fname, lname, tape, fmt, manual_lbl)
+            # Get data tuple and update UI
+            data = dialog.get_data() 
+            self.update_session_display(*data)
         else:
             self.btn_record.setChecked(False)
             return
         
+        # Sudo check for FireWire permissions
         password, ok = QInputDialog.getText(self, "Sudo Access", "Enter Password for FireWire Access:", QLineEdit.EchoMode.Password)
         if ok and password:
             os.system(f"echo {password} | sudo -S chmod 666 /dev/fw*")
@@ -253,167 +162,71 @@ class CaptureDeck(QWidget):
             self.btn_record.setChecked(False)
             return
 
-        devices = glob.glob('/dev/fw*')
-        if len(devices) < 2:
-            self.btn_record.setChecked(False)
-            self.info_label.setText("Current Session: Waiting for Setup...")
-            QMessageBox.critical(self, "Connection Error", 
-                                 "Camera not detected!\n\n"
-                                 "My System sees the FireWire CARD, but not the CAMERA.")
-            return
+        # Setup Paths via Manager
+        dir_path, full_path, filename = self.manager.generate_paths(self.session_data)
+        os.makedirs(dir_path, exist_ok=True)
+        self.current_recording_path = full_path
 
-        season_folder = self.get_meteorological_season()
-        client_folder = f"{self.client_lname.lower()}_{self.client_fname.lower()}"
-        format_folder = self.tape_format
-
-        now = datetime.datetime.now()
-        yymm = now.strftime("%y%m")
-        timestamp_str = now.strftime("%Y.%m.%d_%H-%M-%S")
-
-        if self.tape_format == "mini_dv":
-            final_folder = f"tape_{self.tape_num}_dv-{yymm}_{yymm}"
-            filename_base = f"{self.client_lname.lower()}_{self.client_fname.lower()}_mdv_t{self.tape_num}_MASTER.dv"
-        else:
-            clean_label = self.manual_folder.replace(" ", "_").lower()
-            final_folder = clean_label if clean_label else "manual_capture"
-            filename_base = f"{self.client_lname.lower()}_{self.client_fname.lower()}_d8_t{self.tape_num}-{timestamp_str}"
-
-        full_dir_path = os.path.join(
-            root_path,
-            format_folder,
-            season_folder,
-            client_folder,
-            "dv_format",
-            final_folder
-        )
-        
-        os.makedirs(full_dir_path, exist_ok=True)
-        print(f"Saving to: {full_dir_path}")
-
-        self.current_recording_path = os.path.join(full_dir_path, filename_base) # Store for cleanup check
-
+        # Update UI for Recording
         self.btn_record.setText("⏹ STOP REC")
         self.video_frame.setStyleSheet("border: 2px solid red;")
+        self.kill_process() # Stop any existing preview
 
-        self.kill_process() 
-
-        wid = str(int(self.video_frame.winId()))
+        # Start Recording Process
+        cmd = self.manager.get_capture_command(full_path, int(self.video_frame.winId()))
+        self.info_label.setText(f"Recording: {filename}")
         
-        cmd = f"dvgrab --format raw - | tee {self.current_recording_path} | mpv --wid={wid} --profile=low-latency -"
+        self.start_process(cmd)
         
-        self.info_label.setText(f"Recording: {filename_base}")
-
-        self.preview_process =subprocess.Popen(cmd, shell=True, preexec_fn=os.setsid)
-
+        # Start Watchdog
         self.watchdog = RecordingWatchdog(self.preview_process)
         self.watchdog.crash_detected.connect(self.on_crash_detected)
         self.watchdog.start()
 
+    # --- AUTOSPLIT LOGIC ---
     def process_autosplit(self):
         master_file = self.current_recording_path
+        cmd = self.manager.get_autosplit_command(master_file)
 
-        if not self.current_recording_path or not os.path.exists(master_file):
-            print("Error: Master file not found for autosplit.")
-            return
+        # UI: Progress Dialog
+        self.progress = QProgressDialog("Scanning tape for scenes...", "Abort", 0, 0, self)
+        self.progress.setWindowTitle("Processing Scenes")
+        self.progress.setWindowModality(Qt.WindowModality.WindowModal)
+        self.progress.setMinimumDuration(0)
+        self.progress.setValue(0)
+
+        # Worker: Handles the blocking process
+        self.splitter = AutosplitWorker(master_file, cmd)
+        self.splitter.status_update.connect(lambda msg: self.progress.setLabelText(f"Status: {msg}"))
+        self.splitter.finished.connect(self.on_autosplit_finished)
+        self.progress.canceled.connect(self.splitter.cancel)
         
-        folder_path = os.path.dirname(master_file)
-        # Base name for the split files (e.g. "lastname_firstname_mdv_t01-")
-        base_name = os.path.basename(master_file).replace("_MASTER.dv", "-")
+        self.splitter.start()
 
-        # 1. Run dvgrab autosplit
-        cmd = f'cd "{folder_path}" && dvgrab --autosplit --timestamp --size 0 --format raw -I "{master_file}" "{base_name}"'
-
-        progress = QProgressDialog("Scanning tape for scenes...", "Abort", 0, 0, self)
-        progress.setWindowTitle("Processing Scenes")
-        progress.setWindowModality(Qt.WindowModality.WindowModal)
-        progress.setMinimumDuration(0)
-        progress.setValue(0)
-
-        process = subprocess.Popen(cmd, shell=True, stderr=subprocess.PIPE, text=True)
-
-        while True:
-            line = process.stderr.readline()
-            if not line and process.poll() is not None:
-                break
-            if line:
-                progress.setLabelText(f"Status: {line.strip()}")
-                QApplication.processEvents()
-            if progress.wasCanceled():
-                process.terminate()
-                self.info_label.setText("Autosplit Cancelled.")
-                return
-            
-        progress.setValue(100)
-
-        # 2. Check the output file to see if dvgrab found a date
-        # dvgrab usually names the first file "...-001.dv" if it can't find a date, 
-        # or "...2004.05.21_14-30-00.dv" if it can.
-        
-        # We look for the first split file generated
-        split_files = glob.glob(os.path.join(folder_path, f"{base_name}*.dv"))
-        # Exclude the master file from this list if it's still there
-        split_files = [f for f in split_files if "_MASTER.dv" not in f]
+    def on_autosplit_finished(self):
+        self.progress.setValue(100)
+        master_file = self.current_recording_path
+        split_files = self.manager.find_split_files(master_file)
 
         if not split_files:
             QMessageBox.warning(self, "Error", "Autosplit failed to generate any scene files.")
             return
 
-        # Grab the first file to check its timestamp
-        first_scene = split_files[0]
-        
-        # Helper function to check if a file has a valid digital timestamp
-        def has_valid_timestamp(file_path):
-            try:
-                # We check for the date format YYYY.MM.DD in the filename 
-                # (dvgrab puts it there automatically if it finds data)
-                filename = os.path.basename(file_path)
-                # Simple check: does it contain a 4 digit year starting with 19 or 20?
-                if "19" in filename or "20" in filename:
-                     # You could add stricter regex here if needed
-                     return True
-            except:
-                pass
-            return False
-
-        # 3. Decision Time: Did we get a date?
-        if has_valid_timestamp(first_scene):
-            print("Success: Date detected automatically.")
+        # Date Check
+        if self.manager.has_valid_timestamp(split_files[0]):
             final_status = "Session Complete. Scenes split successfully."
         else:
-            # --- THE NEW LOGIC: ASK THE USER ---
-            print("Metadata missing. Prompting user...")
-            
-            # Play a sound or bring window to front here if you like
-            
+            # Metadata missing logic
             date_str, ok = QInputDialog.getText(self, "Metadata Missing", 
-                                                "The camera clock was not set for this tape.\n\n"
-                                                "Please enter the date for these clips (YYYY.MM.DD):",
-                                                QLineEdit.EchoMode.Normal, 
-                                                "1990.01.01")
-            
+                                                "Camera clock was missing.\nEnter date (YYYY.MM.DD):",
+                                                QLineEdit.EchoMode.Normal, "1990.01.01")
             if ok and date_str:
-                # Rename all the split files with this manual date
-                # Example: base-001.dv -> base-MANUALDATE_001.dv
-                for f in split_files:
-                    path, name = os.path.split(f)
-                    # preserve the scene number (usually at the end like 001.dv)
-                    # This logic depends slightly on how dvgrab named the undated file.
-                    # Usually it is "basename001.dv"
-                    
-                    # We inject the date before the extension
-                    new_name = name.replace(".dv", f"_{date_str}.dv")
-                    new_full_path = os.path.join(path, new_name)
-                    
-                    try:
-                        os.rename(f, new_full_path)
-                    except OSError as e:
-                        print(f"Rename error: {e}")
-                
+                self.manager.batch_rename_files(split_files, date_str)
                 final_status = f"Session Complete. Manually dated to {date_str}."
             else:
-                final_status = "Session Complete. Files left undated (User Cancelled)."
+                final_status = "Session Complete. Files left undated."
 
-        # 4. Clean up Master File
+        # Master Cleanup
         reply = QMessageBox.question(self, 'Save Space?',
                                         f"{final_status}\n\nDo you want to DELETE the original Master file?",
                                         QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
