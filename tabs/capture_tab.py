@@ -5,7 +5,7 @@ import subprocess
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QLabel, QPushButton, 
                              QHBoxLayout, QGridLayout, QFrame, QMessageBox,
                              QInputDialog, QLineEdit, QProgressDialog)
-from PyQt6.QtCore import Qt, pyqtSignal # <--- ADDED pyqtSignal
+from PyQt6.QtCore import Qt, pyqtSignal
 
 # --- IMPORTS ---
 from components.session_dialog import SessionDialog
@@ -14,7 +14,7 @@ from core.workers import RecordingWatchdog, AutosplitWorker
 
 class CaptureDeck(QWidget):
     # Signal emits the folder path when a session is fully complete
-    session_finished = pyqtSignal(str) # <--- NEW SIGNAL
+    session_finished = pyqtSignal(str) 
 
     def __init__(self, config):
         super().__init__()
@@ -133,19 +133,12 @@ class CaptureDeck(QWidget):
             self.info_label.setText("Current Session: Waiting for Setup...")
             self.kill_process()
 
-            # Check if we should split (Only for MiniDV usually)
-            if self.session_data[3] == "mini_dv":
-                if self.current_recording_path and os.path.exists(self.current_recording_path):
-                    if os.path.getsize(self.current_recording_path) > 0:
-                        self.process_autosplit()
-                    else:
-                        print("Warning: Master file is empty.")
-            else:
-                # For non-MiniDV (like Digital8), we are done immediately upon stop
-                if self.current_recording_path and os.path.exists(self.current_recording_path):
-                     folder_path = os.path.dirname(self.current_recording_path)
-                     self.session_finished.emit(folder_path) # <--- EMIT SIGNAL
-
+            # CHANGED: We now ALWAYS attempt to autosplit, regardless of format.
+            if self.current_recording_path and os.path.exists(self.current_recording_path):
+                if os.path.getsize(self.current_recording_path) > 0:
+                    self.process_autosplit()
+                else:
+                    print("Warning: Master file is empty.")
             return
 
         # 2. STARTING RECORDING
