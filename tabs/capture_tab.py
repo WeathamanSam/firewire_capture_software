@@ -7,7 +7,7 @@ from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QLabel, QPushButton,
                              QInputDialog, QLineEdit, QProgressDialog)
 from PyQt6.QtCore import Qt
 
-# --- NEW IMPORTS ---
+# --- IMPORTS ---
 from components.session_dialog import SessionDialog
 from core.capture_manager import CaptureManager
 from core.workers import RecordingWatchdog, AutosplitWorker
@@ -143,24 +143,24 @@ class CaptureDeck(QWidget):
         is_safe, free_gb = self.manager.check_disk_space()
         if not is_safe:
             QMessageBox.warning(self, "Low Disk Space", f"⚠️ WARNING: Only {free_gb}GB free!\nRecording may stop abruptly.")
-            # We allow them to continue if they want, or we could return here.
 
         dialog = SessionDialog(self.manager.config.get("root_archive_path"))
         if dialog.exec():
-            # Get data tuple and update UI
             data = dialog.get_data() 
             self.update_session_display(*data)
         else:
             self.btn_record.setChecked(False)
             return
         
-        # Sudo check for FireWire permissions
-        password, ok = QInputDialog.getText(self, "Sudo Access", "Enter Password for FireWire Access:", QLineEdit.EchoMode.Password)
-        if ok and password:
-            os.system(f"echo {password} | sudo -S chmod 666 /dev/fw*")
-        else:
-            self.btn_record.setChecked(False)
-            return
+        # --- PERMISSION CHECK ---
+        # Only prompt for password if we actually need it
+        if not self.manager.check_firewire_permissions():
+            password, ok = QInputDialog.getText(self, "Sudo Access", "Enter Password for FireWire Access:", QLineEdit.EchoMode.Password)
+            if ok and password:
+                os.system(f"echo {password} | sudo -S chmod 666 /dev/fw*")
+            else:
+                self.btn_record.setChecked(False)
+                return
 
         # Setup Paths via Manager
         dir_path, full_path, filename = self.manager.generate_paths(self.session_data)
