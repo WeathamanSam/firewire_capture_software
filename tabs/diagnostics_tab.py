@@ -145,6 +145,8 @@ class DiagnosticsTab(QWidget):
 
     def on_diagnostics_finished(self, success, missing_items):
         self.run_btn.setEnabled(True)
+        
+        # Logic to differentiate between 'all' and individual checks
         if self.worker.mode == 'all':
             self.checks_finished.emit(missing_items)
             self.missing_items = missing_items 
@@ -155,6 +157,48 @@ class DiagnosticsTab(QWidget):
                 self.log("\n⚠️ [RESULT] ISSUES DETECTED.")
                 if any(x not in ["FireWire Hardware"] for x in missing_items):
                     self.fix_btn.setVisible(True)
+        else:
+            self.handle_individual_result(self.worker.mode, success, missing_items)
+
+    def handle_individual_result(self, mode, success, missing_items):
+        """Provides specific feedback for individual button clicks."""
+        feedback = {
+            'drivers': {
+                'title': "Driver Status",
+                'success': "✅ FireWire Drivers are ACTIVE.\nThe 'firewire_ohci' kernel module is loaded.",
+                'fail': "❌ Drivers MISSING.\nThe 'firewire_ohci' module is not loaded.\nTry rebooting or running the Fix tool."
+            },
+            'hardware': {
+                'title': "Hardware Status",
+                'success': "✅ FireWire Card DETECTED.\nSystem sees a device at /dev/fw*.",
+                'fail': "❌ FireWire Card NOT DETECTED.\nPlease check if the card is seated correctly in the PCI slot."
+            },
+            'permissions': {
+                'title': "Permission Status",
+                'success': "✅ User Permissions OK.\nYou are a member of the 'video' group.",
+                'fail': "❌ Permission ERROR.\nYou are not in the 'video' group.\nClick 'Fix Issues' to resolve this."
+            },
+            'software': {
+                'title': "Software Suite",
+                'success': "✅ All required software is INSTALLED.",
+                'fail': f"❌ Missing Software Components:\n{', '.join(missing_items)}\nClick 'Fix Issues' to install them."
+            }
+        }
+
+        info = feedback.get(mode, {'title': 'Check Complete', 'success': 'Passed', 'fail': 'Failed'})
+        message = info['success'] if success else info['fail']
+        icon = QMessageBox.Icon.Information if success else QMessageBox.Icon.Warning
+
+        # Log to terminal (single line clean up)
+        clean_msg = message.replace('\n', ' ')
+        self.log(f"\n[{info['title']}] {clean_msg}")
+
+        # Popup for user attention
+        dlg = QMessageBox(self)
+        dlg.setWindowTitle(info['title'])
+        dlg.setText(message)
+        dlg.setIcon(icon)
+        dlg.exec()
 
     def run_installer(self):
         self.fix_btn.setEnabled(False)
