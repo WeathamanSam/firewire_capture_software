@@ -5,7 +5,7 @@ import subprocess
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QLabel, QPushButton, 
                              QHBoxLayout, QGridLayout, QFrame, QMessageBox,
                              QInputDialog, QLineEdit, QProgressDialog)
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, pyqtSignal # <--- ADDED pyqtSignal
 
 # --- IMPORTS ---
 from components.session_dialog import SessionDialog
@@ -13,6 +13,9 @@ from core.capture_manager import CaptureManager
 from core.workers import RecordingWatchdog, AutosplitWorker
 
 class CaptureDeck(QWidget):
+    # Signal emits the folder path when a session is fully complete
+    session_finished = pyqtSignal(str) # <--- NEW SIGNAL
+
     def __init__(self, config):
         super().__init__()
         # Use the new Manager for logic
@@ -137,6 +140,12 @@ class CaptureDeck(QWidget):
                         self.process_autosplit()
                     else:
                         print("Warning: Master file is empty.")
+            else:
+                # For non-MiniDV (like Digital8), we are done immediately upon stop
+                if self.current_recording_path and os.path.exists(self.current_recording_path):
+                     folder_path = os.path.dirname(self.current_recording_path)
+                     self.session_finished.emit(folder_path) # <--- EMIT SIGNAL
+
             return
 
         # 2. STARTING RECORDING
@@ -240,3 +249,7 @@ class CaptureDeck(QWidget):
                 pass
         else:
             self.info_label.setText("Master Saved. " + final_status)
+        
+        # --- SIGNAL FINISHED ---
+        # Emit the folder path so main.py can switch tabs
+        self.session_finished.emit(os.path.dirname(master_file))
