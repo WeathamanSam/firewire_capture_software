@@ -18,7 +18,12 @@ class DiagnosticWorker(QThread):
     CATEGORIES = {
         # CHANGED: Added 'dvcont' to the check list
         'capture': ['dvgrab', 'dvcont', 'firewire_ohci (Driver)', 'video_group_permission', 'FireWire Hardware'],
-        'converter': ['ffmpeg', 'mpv', 'ffprobe']
+        'converter': ['ffmpeg', 'mpv', 'ffprobe'],
+        # --- NEW SPECIFIC CATEGORIES ---
+        'drivers': ['firewire_ohci (Driver)'],
+        'hardware': ['FireWire Hardware'],
+        'permissions': ['video_group_permission'],
+        'software': ['dvgrab', 'dvcont', 'ffmpeg', 'mpv', 'ffprobe']
     }
 
     def __init__(self, mode='all'):
