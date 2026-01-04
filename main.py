@@ -2,7 +2,7 @@
 import sys
 import locale 
 from PyQt6.QtCore import QTimer
-from PyQt6.QtWidgets import (QApplication, QMainWindow, QTabWidget)
+from PyQt6.QtWidgets import (QApplication, QMainWindow, QTabWidget, QMessageBox)
 
 # --- IMPORT MODULES ---
 from core.config_manager import ConfigManager 
@@ -53,9 +53,12 @@ class RetroReelApp(QMainWindow):
         self.tabs.addTab(self.help_tab, "❓ Help")
         self.tabs.addTab(self.feedback_tab, "💬 Feedback")
 
-        # Connections
+        # --- CONNECTIONS ---
         self.diag_tab.checks_finished.connect(self.handle_diagnostic_results)
         self.diag_tab.camera_online.connect(self.handle_camera_status)
+        
+        # NEW: Connect Capture Tab finish signal to the Auto-Switcher
+        self.capture_tab.session_finished.connect(self.on_capture_session_finished)
 
         self.update_tab_locks()
         self.diag_tab.run_diagnostics('all')
@@ -111,6 +114,22 @@ class RetroReelApp(QMainWindow):
         # Called by the Live Monitor in the Diagnostics tab
         self.camera_connected = is_connected
         self.update_tab_locks()
+
+    def on_capture_session_finished(self, folder_path):
+        """Called when a tape finishes recording/splitting."""
+        # 1. Unlock converter tab just in case
+        if not self.tabs.isTabEnabled(3):
+             QMessageBox.warning(self, "Missing Software", "Capture finished, but FFmpeg is missing.\nCannot start conversion.")
+             return
+
+        # 2. Switch to Converter Tab
+        self.tabs.setCurrentIndex(3)
+        
+        # 3. Automatically start the conversion process for the new folder
+        self.converter_tab.start_conversion(folder_path)
+        
+        QMessageBox.information(self, "Session Complete", 
+                                f"Capture successful!\n\nStarting automated conversion for:\n{folder_path}")
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
