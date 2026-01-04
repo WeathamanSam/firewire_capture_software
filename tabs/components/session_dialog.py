@@ -7,23 +7,21 @@ from PyQt6.QtWidgets import (QDialog, QFormLayout, QComboBox, QLineEdit,
 from PyQt6.QtCore import Qt
 
 class SessionDialog(QDialog):
-    # CHANGED: Added root_path argument to __init__
     def __init__(self, root_path):
         super().__init__()
         self.setWindowTitle("New Session Setup")
         self.resize(450, 250)
         
-        self.root_path = root_path # Store the dynamic path
+        self.root_path = root_path 
         
         layout = QFormLayout()
         self.setLayout(layout)
         
-        # --- THE MAPPING ---
+        # --- THE MAPPING (RESTRICTED) ---
+        # Removed Hi8 and Video8 as requested.
         self.format_map = {
             "MiniDV":   "mini_dv",
-            "Digital8": "digital_8",
-            "Hi8":      "hi_8",
-            "Video8":   "video_8"
+            "Digital8": "digital_8"
         }
         
         # 1. FORMAT SELECTION
@@ -80,7 +78,6 @@ class SessionDialog(QDialog):
         self.suggest_next_tape()
 
     def get_base_path(self):
-        # CHANGED: Uses self.root_path instead of hardcoded ~/Desktop
         fmt_folder = self.format_map[self.format_combo.currentText()]
         return os.path.join(self.root_path, fmt_folder)
 
