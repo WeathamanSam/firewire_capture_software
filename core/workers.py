@@ -1,4 +1,4 @@
-# workers.py
+# core/workers.py
 import shutil
 import subprocess
 import os
@@ -9,7 +9,7 @@ import time
 import hashlib
 from PyQt6.QtCore import QThread, pyqtSignal
 
-# --- DIAGNOSTICS WORKER ---
+# --- DIAGNOSTICS WORKER (UNCHANGED) ---
 class DiagnosticWorker(QThread):
     status_update = pyqtSignal(str)
     progress_update = pyqtSignal(int)
@@ -47,7 +47,7 @@ class DiagnosticWorker(QThread):
         
         self.finished.emit(len(missing_items) == 0, missing_items)
 
-# --- CONVERTER WORKER ---
+# --- CONVERTER WORKER (UNCHANGED) ---
 class ConverterWorker(QThread):
     log_message = pyqtSignal(str)
     progress_update = pyqtSignal(int)
@@ -188,7 +188,7 @@ class ConverterWorker(QThread):
         self.progress_update.emit(100)
         self.finished.emit(True)
 
-# --- MONITOR & INSTALLER ---
+# --- MONITOR & INSTALLER (UNCHANGED) ---
 class ConnectionMonitorWorker(QThread):
     status_update = pyqtSignal(str)
     def __init__(self):
@@ -216,3 +216,56 @@ class InstallerWorker(QThread):
             if apt_tools: subprocess.run(["pkexec", "apt-get", "install", "-y"] + apt_tools, check=True)
             self.finished.emit(True, "Success")
         except Exception as e: self.finished.emit(False, str(e))
+
+# --- NEW ADDITIONS (MOVED FROM CAPTURE TAB) ---
+
+class RecordingWatchdog(QThread):
+    """Monitors the recording process. Emits crash_detected if it dies."""
+    crash_detected = pyqtSignal()
+    
+    def __init__(self, process):
+        super().__init__()
+        self.process = process
+        self.is_active = True
+        
+    def run(self):
+        while self.is_active:
+            # If the process stops running (returns a code), emit crash signal
+            if self.process.poll() is not None:
+                if self.is_active: 
+                    self.crash_detected.emit()
+                return
+            self.msleep(500)
+            
+    def stop_monitoring(self):
+        self.is_active = False
+
+class AutosplitWorker(QThread):
+    """Handles the blocking dvgrab autosplit process."""
+    status_update = pyqtSignal(str)
+    finished = pyqtSignal()
+
+    def __init__(self, master_file, cmd):
+        super().__init__()
+        self.master_file = master_file
+        self.cmd = cmd
+        self.process = None
+        self.is_running = True
+
+    def run(self):
+        # Run dvgrab command
+        self.process = subprocess.Popen(self.cmd, shell=True, stderr=subprocess.PIPE, text=True)
+        
+        while self.is_running:
+            line = self.process.stderr.readline()
+            if not line and self.process.poll() is not None:
+                break
+            if line:
+                self.status_update.emit(line.strip())
+        
+        self.finished.emit()
+
+    def cancel(self):
+        self.is_running = False
+        if self.process:
+            self.process.terminate()
