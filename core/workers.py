@@ -9,14 +9,15 @@ import time
 import hashlib
 from PyQt6.QtCore import QThread, pyqtSignal
 
-# --- DIAGNOSTICS WORKER (UNCHANGED) ---
+# --- DIAGNOSTICS WORKER ---
 class DiagnosticWorker(QThread):
     status_update = pyqtSignal(str)
     progress_update = pyqtSignal(int)
     finished = pyqtSignal(bool, list)
 
     CATEGORIES = {
-        'capture': ['dvgrab', 'firewire_ohci (Driver)', 'video_group_permission', 'FireWire Hardware'],
+        # CHANGED: Added 'dvcont' to the check list
+        'capture': ['dvgrab', 'dvcont', 'firewire_ohci (Driver)', 'video_group_permission', 'FireWire Hardware'],
         'converter': ['ffmpeg', 'mpv', 'ffprobe']
     }
 
@@ -47,7 +48,7 @@ class DiagnosticWorker(QThread):
         
         self.finished.emit(len(missing_items) == 0, missing_items)
 
-# --- CONVERTER WORKER (UNCHANGED) ---
+# --- CONVERTER WORKER ---
 class ConverterWorker(QThread):
     log_message = pyqtSignal(str)
     progress_update = pyqtSignal(int)
@@ -188,7 +189,7 @@ class ConverterWorker(QThread):
         self.progress_update.emit(100)
         self.finished.emit(True)
 
-# --- MONITOR & INSTALLER (UNCHANGED) ---
+# --- MONITOR & INSTALLER ---
 class ConnectionMonitorWorker(QThread):
     status_update = pyqtSignal(str)
     def __init__(self):
